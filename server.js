@@ -14,10 +14,10 @@ const drive = google.drive({ version: 'v3', auth: oauth2Client });
 // High-resolution fallback video icon
 const FALLBACK_VIDEO_ICON = 'https://cdn-icons-png.flaticon.com/512/1179/1179069.png';
 
-// 2. Define the Manifest with 2 Catalogs
+// 2. Define the Manifest (🚨 FIXED: Added 'meta' to resources)
 const manifest = {
     id: 'com.mdrive.cloud',
-    version: '1.2.0',
+    version: '1.3.0',
     name: 'M Drive',
     description: 'Stream directly from your Google Drive & Shared files',
     catalogs: [
@@ -32,22 +32,20 @@ const manifest = {
             name: 'M Drive - Shared With Me'
         }
     ],
-    resources: ['catalog', 'stream'],
+    resources: ['catalog', 'meta', 'stream'], // <-- Meta is now here!
     types: ['movie', 'series', 'other'],
     idPrefixes: ['gdrive:']
 };
 
 const builder = new addonBuilder(manifest);
 
-// 3. Catalog Handler: Scans for all video files (limit 1000)
+// 3. Catalog Handler: The Menu of Videos
 builder.defineCatalogHandler(async ({ type, id }) => {
     let query = "";
 
     if (id === 'gdrive_my_videos') {
-        // Finds all video files owned by you across all folders
         query = "mimeType contains 'video/' and trashed = false and 'me' in owners";
     } else if (id === 'gdrive_shared_videos') {
-        // Finds all video files shared with your account
         query = "mimeType contains 'video/' and trashed = false and sharedWithMe = true";
     } else {
         return { metas: [] };
@@ -56,12 +54,11 @@ builder.defineCatalogHandler(async ({ type, id }) => {
     try {
         const res = await drive.files.list({
             q: query,
-            fields: 'files(id, name, mimeType, thumbnailLink)',
-            pageSize: 1000 // Up to 1000 items
+            fields: 'files(id, name, thumbnailLink)',
+            pageSize: 1000
         });
 
         const metas = res.data.files.map(file => {
-            // High-resolution Google Drive video thumbnail trick
             let posterUrl = FALLBACK_VIDEO_ICON;
             if (file.thumbnailLink) {
                 posterUrl = file.thumbnailLink.replace(/=s\d+/, '=s800');
@@ -72,8 +69,7 @@ builder.defineCatalogHandler(async ({ type, id }) => {
                 type: 'other',
                 name: file.name,
                 posterShape: 'poster',
-                poster: posterUrl,
-                description: `Google Drive File: ${file.name}`
+                poster: posterUrl
             };
         });
 
@@ -84,7 +80,43 @@ builder.defineCatalogHandler(async ({ type, id }) => {
     }
 });
 
-// 4. Stream Handler: Direct Video Streaming
+// 4. Meta Handler: The Movie Details Page (🚨 NEW: Stremio needs this to open the video)
+builder.defineMetaHandler(async ({ type, id }) => {
+    if (id.startsWith('gdrive:')) {
+        const fileId = id.split(':')[1];
+        
+        try {
+            // Ask Google Drive for the specific file details
+            const res = await drive.files.get({
+                fileId: fileId,
+                fields: 'id, name, thumbnailLink'
+            });
+            
+            const file = res.data;
+            let posterUrl = FALLBACK_VIDEO_ICON;
+            if (file.thumbnailLink) {
+                posterUrl = file.thumbnailLink.replace(/=s\d+/, '=s800'); // Upgrades to HD
+            }
+
+            return {
+                meta: {
+                    id: `gdrive:${file.id}`,
+                    type: 'other',
+                    name: file.name,
+                    poster: posterUrl,
+                    background: posterUrl,
+                    description: "Streaming directly from your Google Drive."
+                }
+            };
+        } catch (error) {
+            console.error("Meta Error:", error.message);
+            return { meta: {} };
+        }
+    }
+    return { meta: {} };
+});
+
+// 5. Stream Handler: Direct Video Streaming
 builder.defineStreamHandler(async ({ type, id }) => {
     if (id.startsWith('gdrive:')) {
         const fileId = id.split(':')[1];
@@ -110,6 +142,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
     return { streams: [] };
 });
 
-// 5. Start Server
+// 6. Start Server
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
 console.log('M Drive Addon Server is running!');
